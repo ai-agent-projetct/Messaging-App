@@ -1,0 +1,16 @@
+{
+  "name": "whatsapp-sales-bot",
+  "version": "1.0.0",
+  "description": "Automated WhatsApp Business sales assistant: replies to leads, follows up and pushes deals to close, using the WhatsApp Cloud API and Claude.",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "import": "node --env-file-if-exists=.env src/import.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0"
+  }
+}
