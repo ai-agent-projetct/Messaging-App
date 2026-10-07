@@ -69,7 +69,54 @@ the business information, to read details back before booking, and to admit it i
 asked. Most quality improvements come from improving this prompt and the business
 information each customer writes.
 
-## 3. Turning on the real AI
+## 3. How the smart features work
+
+Each feature is a small, readable file in `server/`. Here is the idea behind each one.
+
+**Caller memory (`customers.js`).** Every phone number that calls becomes a customer record.
+When they call again, `startCall` finds them, the greeting becomes "Welcome back, Ravi!",
+and a short `<caller_profile>` (name, past bookings, notes) is added to the system prompt.
+
+**The teaching loop (`tools.js` → `note_unanswered_question`).** The prompt tells Claude to
+use this tool whenever the answer isn't in the business information. Questions collect on the
+**Teach it** page, counted by how often they're asked. The owner's answer is saved to the
+receptionist's FAQs, which go into every future system prompt.
+
+**Structured outputs (`llm.js` → `structured()`).** For the post-call analysis, the setup
+assistant and the Test Lab grades, we give Claude a JSON schema and it must reply with JSON
+that fits it exactly. That's how we get reliable fields like `lead_score: "hot"` instead of
+free text we'd have to guess at.
+
+**Post-call analysis (`analysis.js`).** When a call ends, the transcript goes to Claude with
+that schema: summary, intent, sentiment, lead score, follow-up. Hot leads and unhappy callers
+trigger `notifyOwner`.
+
+**The Test Lab (`simulator.js`).** One Claude plays a customer (with a persona brief), and the
+real receptionist brain answers. Then a third Claude call grades the transcript against the
+business information. Anything the test booked is deleted afterwards. Questions it uncovered
+are kept, because they are real gaps.
+
+**The scheduler (`scheduler.js`).** Every 20 seconds it sends reminders for bookings in the next
+24 hours, sends the owner's evening brief, closes calls left open, and places the next
+campaign calls. In production you'd move this to a job queue (see section 8).
+
+**Messaging (`messaging.js`).** Every WhatsApp or SMS is first saved in an outbox (the
+**Messages** page), then sent through Twilio. Without credentials, messages are kept as
+"not configured", so nothing is lost silently. **WhatsApp rule:** businesses can only send
+free-form messages within 24 hours of the customer's last message. Reminders and briefs outside
+that window need **pre-approved templates**, which you register in Twilio/Meta before launch.
+
+**Campaigns (`campaigns.js`).** Outbound calls follow rules written in code: consent must be
+confirmed, calls are only placed inside the window (never before 9am or after 9pm), anyone on
+the do-not-call list is skipped, and every call opens with "this is an AI assistant calling
+from [business]". Set `TWILIO_CALLER_ID` and `PUBLIC_URL` to enable dialling.
+
+**Plans (`plans.js`).** Minutes are counted from real phone and widget conversations each
+month. When a business runs out, callers are never dropped: they are transferred to the
+owner, and the owner gets an alert to upgrade. People listed in `ADMIN_EMAILS` see the
+**Admin** console, where they can see every business and change its plan.
+
+## 4. Turning on the real AI
 
 1. Create an account at <https://console.anthropic.com>, add billing, create an API key.
 2. In `voice-ai/`, run `cp .env.example .env` and paste the key after `ANTHROPIC_API_KEY=`.
@@ -79,7 +126,7 @@ information each customer writes.
 You can try `AGENT_MODEL` with a faster model (for example `claude-sonnet-5-5`) and compare
 quality against speed in test calls.
 
-## 4. Connecting a real phone number
+## 5. Connecting a real phone number
 
 Twilio needs to reach your server over the internet with HTTPS.
 
@@ -102,7 +149,7 @@ your webhook and you reply with instructions. To support one, add a new file nex
 `routes/twilio.js` that speaks that provider's format; the brain (`agent.js`) stays the same.
 Check each provider's current Indian number availability and pricing before you choose.
 
-## 5. What it costs you per call (work this out before setting prices)
+## 6. What it costs you per call (work this out before setting prices)
 
 Each minute of a call costs you:
 
@@ -122,7 +169,7 @@ know your costs.
 **Ways to reduce AI cost:** keep business info concise, use lower effort, and try a smaller
 model on simple receptionists.
 
-## 6. Version 2: making it feel instant
+## 7. Version 2: making it feel instant
 
 This first version uses Twilio's `<Gather>`: wait for the caller to finish, recognise the
 whole sentence, think, then speak. It is simple and reliable, but each turn has roughly
@@ -144,7 +191,7 @@ Done well, this brings the gap down to under a second. Build this **after** you 
 paying customers who like version 1. Only the phone layer and `agent.js` change; the
 dashboard, tools and database stay the same.
 
-## 7. Going to production: checklist
+## 8. Going to production: checklist
 
 **Technical**
 - [ ] Host the server (for example Render, Railway, Fly.io, or AWS/GCP in the Mumbai region),
@@ -155,10 +202,14 @@ dashboard, tools and database stay the same.
 - [ ] Back up the database daily.
 - [ ] Set `TWILIO_AUTH_TOKEN` and `PUBLIC_URL` so phone webhooks are verified.
 - [ ] Add error monitoring (for example Sentry) and uptime checks on `/healthz`.
-- [ ] Add password reset, team members and usage limits per plan.
-- [ ] Add billing: Razorpay or Stripe subscriptions, and count minutes from
-      `call.durationSec`.
-- [ ] SMS or WhatsApp confirmations for bookings (Twilio, Gupshup or the WhatsApp Business API).
+- [ ] Add password reset and team members (plan limits and usage metering are built in).
+- [ ] Add billing: Razorpay or Stripe subscriptions that set the business's plan (today the
+      Admin console changes plans by hand).
+- [ ] Register **WhatsApp message templates** for reminders, confirmations and the daily brief
+      (needed outside the 24-hour window), or use an Indian WhatsApp provider such as Gupshup.
+- [ ] Move the scheduler (`scheduler.js`) to a job queue if you run more than one server, so
+      reminders aren't sent twice.
+- [ ] Set `TRUST_PROXY=1` behind a load balancer, and `ADMIN_EMAILS` for your team.
 
 **Legal and trust (India)**
 - [ ] Privacy policy and terms of service. India's **Digital Personal Data Protection Act,
@@ -166,13 +217,16 @@ dashboard, tools and database stay the same.
       revenue.
 - [ ] Tell callers that the call is answered by an AI assistant and may be recorded or
       transcribed. A line in the greeting is enough.
-- [ ] This product answers **incoming** calls. **Outgoing** sales calls in India fall under
-      TRAI telemarketing rules (DLT registration, consent, DND lists). Read those rules
-      before you build outbound calling.
+- [ ] **Campaigns** place outgoing calls. In India these fall under TRAI telemarketing rules
+      (DLT registration, consent, DND lists). The code enforces consent, calling hours,
+      do-not-call and AI disclosure, but **get legal advice and register before your
+      customers run campaigns**.
+- [ ] Data requests: **Customers → Erase all data** handles deletion requests; CSV export
+      handles access requests.
 - [ ] Medical and legal businesses: keep the "never give advice" instructions (the clinic
       template already has them).
 
-## 8. Launching to local businesses
+## 9. Launching to local businesses
 
 1. **Pick one niche first** (for example clinics in your city). The templates, demo and
    sales pitch all get sharper when you focus.
@@ -185,18 +239,21 @@ dashboard, tools and database stay the same.
 5. **Then charge.** Turn the pilots into paying customers, ask them for referrals, and
    expand to the next niche.
 
-## 9. Ideas for the roadmap
+## 10. Ideas for the roadmap
 
-- Streaming voice (section 6) and higher-quality voices
-- A "Talk to us" voice widget businesses can add to their own website
-- WhatsApp channel using the same brain
-- Calendar sync (Google Calendar) instead of the built-in booking list
-- Outbound reminder calls for appointments (after reading the TRAI rules)
+Already built: website widget, caller memory, teaching loop, Test Lab, analysis and lead
+scores, ROI dashboard, WhatsApp follow-ups, reminders, daily brief, live takeover, campaigns,
+plans and admin. Next:
+
+- Streaming voice (section 7) and higher-quality Indian-language voices
+- An Exotel or Plivo adapter for local Indian numbers
+- WhatsApp as a full two-way channel using the same brain
+- Calendar sync (Google Calendar, clinic and salon software)
 - Knowledge upload (PDF menus, price lists)
-- Analytics: top questions, missed opportunities, busiest hours
-- Multi-branch businesses and team roles
+- Team members, roles and multi-branch businesses
+- Self-serve billing (Razorpay)
 
-## 10. Glossary
+## 11. Glossary
 
 - **API**: a way for programs to talk to each other over the internet.
 - **Webhook**: a URL on your server that another service (such as Twilio) calls when

@@ -1,19 +1,26 @@
-# VoiceDesk: AI phone receptionist for local businesses
+# VoiceDesk: the AI front desk for local businesses
 
-VoiceDesk answers a business's phone calls with an AI voice agent. The agent answers
-questions, books appointments, saves leads and transfers callers to staff. It speaks
-English and 9 Indian languages.
+VoiceDesk answers a business's phone calls (and website chats) with an AI receptionist that
+books appointments, answers questions, remembers customers, sends WhatsApp follow-ups, and
+reports the money it made. It speaks English and 9 Indian languages, including mixed speech
+such as Hinglish.
 
-It has three parts:
+**Read first:**
+- [docs/STRATEGY.md](docs/STRATEGY.md): market analysis, positioning and why these features
+- [docs/LEARN.md](docs/LEARN.md): how voice AI works, how to run it, and how to launch
 
-| Part | Where | What it is |
-|---|---|---|
-| **Website** | `public/index.html` | The marketing page that sells the product (`/`) |
-| **Dashboard** | `public/app.html`, `public/js/app.js` | Where a business signs up, sets up its receptionist, tests it and sees calls, bookings and leads (`/app`) |
-| **Server** | `server/` | The API, the AI "brain" and the phone-call webhooks |
+## What's in the product
 
-**New to this?** Read [docs/LEARN.md](docs/LEARN.md). It explains how voice AI works,
-what each file does, and how to take this from your laptop to paying customers.
+| Area | Features |
+|---|---|
+| **Receptionist** | Industry templates · **AI setup assistant** (from a website link or notes) · services with prices · opening hours · FAQs · 10 languages and code-mixing |
+| **On the call** | Book / check / **cancel / reschedule** by voice · save leads · send info on WhatsApp · **alert the owner** · transfer to a person · respects "don't call me" |
+| **Gets smarter** | **"Teach it"**: questions it couldn't answer become answers · **caller memory** (greets returning callers by name, knows their bookings) |
+| **Quality** | **Readiness Test Lab**: AI role-plays tough callers and an AI examiner scores the receptionist with exact fixes |
+| **After the call** | **AI analysis** (summary, intent, mood, hot/warm/cold lead score) · WhatsApp/SMS **confirmations** · **reminders** the day before · hot-lead and unhappy-caller **alerts** |
+| **Owner** | **ROI dashboard** (revenue in ₹, after-hours calls caught) · **daily WhatsApp brief** · **live calls with one-tap takeover** · customers · bookings · leads · CSV export · **erase customer data** |
+| **Growth** | **Outbound campaigns** (win-back, reminders) with consent records, a 9am–9pm calling window, do-not-call and AI disclosure enforced in code · **website voice/chat widget** |
+| **Business** | Plans with minute and receptionist limits · a polite hand-off to a person when minutes run out · **platform admin console** · rate limiting · Twilio signature checks |
 
 ## Run it on your computer
 
@@ -26,16 +33,15 @@ npm start
 ```
 
 Open <http://localhost:3000> for the website and <http://localhost:3000/app> for the dashboard.
-Create an account, choose a template and press **Start test call** to talk to the receptionist
-from your browser.
-
-Without an API key it runs in **demo mode**: everything works, but the receptionist gives
-placeholder answers. To turn on the real AI:
+Without an API key everything runs in **demo mode** (placeholder replies). To turn on the AI,
+phone calls and messaging:
 
 ```bash
-cp .env.example .env      # then put your Anthropic API key in .env
+cp .env.example .env      # fill in the keys you have
 npm run dev               # loads .env and restarts when you edit code
 ```
+
+To see the admin console, put your email in `ADMIN_EMAILS`.
 
 ## Tests
 
@@ -43,23 +49,36 @@ npm run dev               # loads .env and restarts when you edit code
 npm test
 ```
 
-The tests cover sign-up and login, keeping each business's data separate, browser test
-calls, the phone-call flow, Twilio signature checks and booking rules (no double-booking,
-no closed days).
+There are 21 end-to-end tests, all running without any paid account. They cover accounts and
+data isolation, phone webhooks and signature checks, booking rules, the Claude tool loop and
+structured analysis (against a fake API), caller memory, self-service privacy, the teaching
+loop, alerts, ROI, briefs, reminders, live takeover, plan limits, campaign compliance, the
+widget, the Test Lab, the setup assistant, admin, CSV export and data erasure.
 
 ## Project layout
 
 ```
 server/
-  index.js         starts the web server
-  agent.js         the AI brain: prompt + Claude + tool loop
-  tools.js         what the agent can do: check slots, book, save lead, transfer, hang up
-  catalog.js       languages, voices, business templates
-  routes/api.js    dashboard API (accounts, receptionists, calls, bookings, leads)
-  routes/twilio.js phone calls (Twilio webhooks)
-  auth.js          passwords and login sessions
-  db.js            simple JSON-file database
-public/            website + dashboard (plain HTML/CSS/JS, no build step)
-test/              automated tests
-docs/LEARN.md      the beginner's guide
+  index.js            starts the web server and the background scheduler
+  agent.js            the AI brain: system prompt + Claude + tool loop (+ demo brain)
+  tools.js            what the receptionist can do on a call, with the business rules
+  llm.js              Claude client: messages, structured JSON, refusal fallbacks
+  calls.js            call lifecycle (start, end, then analysis)
+  analysis.js         post-call AI analysis and owner alerts
+  customers.js        caller memory, win-back audiences, data erasure
+  messaging.js        WhatsApp/SMS outbox and owner notifications
+  insights.js         ROI numbers and the daily brief
+  scheduler.js        reminders, briefs, stale-call cleanup, campaign dialling
+  campaigns.js        outbound campaigns with compliance rules
+  simulator.js        Readiness Test Lab
+  setup-assistant.js  AI setup from a website link or notes
+  plans.js            plans and usage metering
+  telephony.js        placing outbound calls via Twilio
+  routes/             HTTP API: account, agents, records, growth, public (widget), admin, twilio
+public/
+  index.html          marketing website
+  app.html, js/       dashboard (plain ES modules, no build step)
+  widget.js           embeddable "Talk to us" widget
+test/                 automated tests
+docs/                 STRATEGY.md, LEARN.md
 ```

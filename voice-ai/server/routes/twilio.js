@@ -1,16 +1,21 @@
 // Phone calls through Twilio. How a call flows:
-//   1. Someone dials the business's Twilio number.
-//   2. Twilio POSTs to /twilio/voice. We reply with TwiML (XML instructions):
-//      "say the greeting, then listen" (<Gather input="speech">).
+//   1. Someone dials the business's Twilio number (or a campaign calls them).
+//   2. Twilio POSTs to /twilio/voice (or /twilio/outbound/<callId>). We reply
+//      with TwiML (XML instructions): "say this, then listen" (<Gather>).
 //   3. Twilio turns the caller's speech into text and POSTs it to /twilio/gather.
 //   4. We ask the agent's brain for a reply and answer with more TwiML. Repeat.
 import crypto from "node:crypto";
 import express from "express";
-import { languageInfo } from "../catalog.js";
 import { respond } from "../agent.js";
-import { endCall, normalizePhone, startCall } from "./api.js";
+import { endCall, startCall } from "../calls.js";
+import { languageInfo } from "../catalog.js";
+import { notifyOwner } from "../messaging.js";
+import { canTakeCalls } from "../plans.js";
+import { normalizePhone } from "../util.js";
+import { wrap } from "./helpers.js";
 
 const MAX_SILENCES = 2;
+const FAILED_STATUSES = ["busy", "failed", "no-answer", "canceled"];
 
 export function twilioRouter(db) {
   const r = express.Router();
@@ -20,22 +25,48 @@ export function twilioRouter(db) {
   r.post("/voice", (req, res) => {
     const to = normalizePhone(req.body.To || "");
     const agent = db.find("agents", (a) => a.phoneNumber && a.phoneNumber === to && a.active)[0];
-    if (!agent) {
-      return twiml(res, `<Say>Sorry, this number is not set up yet. Goodbye.</Say><Hangup/>`);
+    if (!agent) return twiml(res, `<Say>Sorry, this number is not set up yet. Goodbye.</Say><Hangup/>`);
+    const org = db.get("orgs", agent.orgId);
+
+    if (!org || !canTakeCalls(db, org)) {
+      // Plan minutes used up: never drop the customer, hand them to a person.
+      notifyOwner(db, agent.orgId, { kind: "limit", title: "Plan minutes used up", body: `A call from ${req.body.From || "a caller"} was passed to you. Upgrade to keep your receptionist answering.`, urgent: true });
+      const human = agent.transferNumber || org?.ownerPhone;
+      return twiml(res, human
+        ? `${say(agent, "Please hold while I connect you.")}<Dial>${escapeXml(human)}</Dial>`
+        : `${say(agent, "Sorry, we can't take your call right now. Please try again later. Goodbye.")}<Hangup/>`);
     }
+
     const call = startCall(db, agent, {
       channel: "phone",
-      callerNumber: req.body.From || "",
+      callerNumber: normalizePhone(req.body.From || ""),
       twilioSid: req.body.CallSid || "",
       silences: 0,
     });
-    twiml(res, gather(agent, call, agent.greeting));
+    twiml(res, gather(agent, call, call.greeting));
   });
 
-  r.post("/gather/:callId", async (req, res) => {
+  // Campaign calls: Twilio fetches this when the person picks up.
+  r.post("/outbound/:callId", (req, res) => {
     const call = db.get("calls", req.params.callId);
     const agent = call && db.get("agents", call.agentId);
     if (!call || !agent || call.status === "ended") return twiml(res, "<Hangup/>");
+    db.update("calls", call.id, { answeredAt: new Date().toISOString(), twilioSid: req.body.CallSid || call.twilioSid });
+    twiml(res, gather(agent, call, call.greeting));
+  });
+
+  r.post("/gather/:callId", wrap(async (req, res) => {
+    const call = db.get("calls", req.params.callId);
+    const agent = call && db.get("agents", call.agentId);
+    if (!call || !agent || call.status === "ended") return twiml(res, "<Hangup/>");
+
+    // The owner pressed "Take over" in the live view.
+    const owner = db.get("orgs", agent.orgId)?.ownerPhone || agent.transferNumber;
+    if (call.takeover && owner) {
+      const human = owner;
+      endCall(db, call, "taken-over");
+      return twiml(res, `${say(agent, "One moment, I'm connecting you to the team now.")}<Dial>${escapeXml(human)}</Dial>`);
+    }
 
     const heard = String(req.body.SpeechResult || "").trim();
     if (!heard) {
@@ -54,21 +85,24 @@ export function twilioRouter(db) {
       endCall(db, call, "completed");
       return twiml(res, `${say(agent, reply)}<Hangup/>`);
     }
-    if (action?.type === "transfer" && agent.transferNumber) {
-      endCall(db, call, "transferred");
-      return twiml(res, `${say(agent, reply)}<Dial>${escapeXml(agent.transferNumber)}</Dial>`);
+    if (action?.type === "transfer") {
+      const human = agent.transferNumber || db.get("orgs", agent.orgId)?.ownerPhone;
+      if (human) {
+        endCall(db, call, "transferred");
+        return twiml(res, `${say(agent, reply)}<Dial>${escapeXml(human)}</Dial>`);
+      }
     }
     twiml(res, gather(agent, call, reply));
-  });
+  }));
 
-  // Set this as the number's "Call status changes" webhook in Twilio to get
-  // accurate call durations (and to close calls when the caller hangs up).
+  // Set as the number's "Call status changes" webhook (campaign calls set it
+  // automatically) to record durations and close calls when people hang up.
   r.post("/status", (req, res) => {
     const call = db.find("calls", (c) => c.twilioSid && c.twilioSid === req.body.CallSid)[0];
-    if (call && ["completed", "busy", "failed", "no-answer", "canceled"].includes(req.body.CallStatus)) {
+    const status = req.body.CallStatus;
+    if (call && (status === "completed" || FAILED_STATUSES.includes(status))) {
       const duration = Number(req.body.CallDuration) || undefined;
-      if (call.status === "ended") db.update("calls", call.id, { durationSec: duration ?? call.durationSec });
-      else endCall(db, call, req.body.CallStatus === "completed" ? "caller-hung-up" : req.body.CallStatus, duration);
+      endCall(db, call, status === "completed" ? "caller-hung-up" : status, duration);
     }
     res.sendStatus(204);
   });

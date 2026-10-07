@@ -72,3 +72,29 @@ test("Claude tool loop books an appointment and speaks the reply", async () => {
   assert.match(second.at(-1).content[0].content, /free slots 09:00/);
   assert.equal(call.messages.length, 6); // user, assistant, results, assistant, results, assistant
 });
+
+test("post-call analysis asks Claude for structured JSON and stores it", async () => {
+  const { analyzeCall } = await import("../server/analysis.js");
+  const db = new Store(null);
+  const org = db.insert("orgs", { name: "Glow", ownerPhone: "", alertsEnabled: true });
+  const call = db.insert("calls", {
+    orgId: org.id, agentId: "a1", channel: "phone", callerNumber: "+919000000002", summary: "",
+    transcript: [{ role: "agent", text: "Hello!" }, { role: "caller", text: "Do you do bridal makeup? My wedding is next month." }],
+  });
+  const report = {
+    summary: "Bride asked about bridal makeup for next month.", intent: "sales_lead", sentiment: "positive",
+    lead_score: "hot", language: "English", follow_up_needed: true, follow_up_note: "Call back with bridal packages.",
+  };
+  replies = [[{ type: "text", text: JSON.stringify(report) }]];
+  const before = requests.length;
+  const analysis = await analyzeCall(db, call);
+
+  const req = requests[before].body;
+  assert.equal(req.output_config.format.type, "json_schema");
+  assert.deepEqual(req.output_config.format.schema.required.sort(), Object.keys(report).sort());
+  assert.equal(req.output_config.format.schema.additionalProperties, false);
+  assert.equal(analysis.leadScore, "hot");
+  assert.equal(db.get("calls", call.id).summary, report.summary);
+  // A hot lead without a booking alerts the owner.
+  assert.equal(db.find("alerts", (a) => a.kind === "hot_lead").length, 1);
+});

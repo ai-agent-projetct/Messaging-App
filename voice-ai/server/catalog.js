@@ -34,7 +34,7 @@ export const TEMPLATES = [
         "Dr. Priya's Family Clinic, 12 Gandhi Road. General physician consultations ₹400, follow-ups within 7 days free. Blood tests available 8am–11am. Parking available behind the building.",
       instructions:
         "Help callers book, reschedule or ask about consultations. Never give medical advice or diagnoses; for emergencies tell them to call 108 or go to the nearest hospital immediately.",
-      services: ["General consultation", "Follow-up", "Blood test"],
+      services: [{ name: "General consultation", price: 400 }, { name: "Follow-up", price: 0 }, { name: "Blood test", price: 600 }],
       bookingEnabled: true,
     },
   },
@@ -47,7 +47,7 @@ export const TEMPLATES = [
       businessInfo:
         "Glow Unisex Salon, Anna Nagar. Haircut ₹300 (men) / ₹600 (women), hair colour from ₹1500, facial from ₹800, bridal packages on consultation.",
       instructions: "Book appointments, explain prices and suggest the right service. Be warm and upbeat.",
-      services: ["Haircut", "Hair colour", "Facial", "Bridal consultation"],
+      services: [{ name: "Haircut", price: 450 }, { name: "Hair colour", price: 1500 }, { name: "Facial", price: 800 }, { name: "Bridal consultation", price: 0 }],
       bookingEnabled: true,
     },
   },
@@ -61,7 +61,7 @@ export const TEMPLATES = [
         "Spice Route Restaurant. South Indian and North Indian, veg and non-veg. Lunch 12–3:30pm, dinner 7–11pm. Home delivery through Swiggy and Zomato. Tables for up to 12 people.",
       instructions:
         "Take table reservations (ask for party size and put it in notes). Answer menu and timing questions. For large parties over 12, take a message for the manager.",
-      services: ["Table reservation"],
+      services: [{ name: "Table reservation", price: 1200 }],
       bookingEnabled: true,
     },
   },
@@ -75,7 +75,7 @@ export const TEMPLATES = [
         "Sunrise Homes. 2 and 3 BHK apartments in Velachery and OMR. 2 BHK from ₹65 lakh, 3 BHK from ₹95 lakh. Site visits daily 10am–6pm.",
       instructions:
         "Qualify the caller: budget, preferred area, BHK, timeline to buy. Always save their details as a lead. Offer a site visit and book it if they agree.",
-      services: ["Site visit"],
+      services: [{ name: "Site visit", price: 0 }],
       bookingEnabled: true,
     },
   },
@@ -92,6 +92,11 @@ export const TEMPLATES = [
     },
   },
 ];
+
+// Older records stored services as plain names; treat those as price 0.
+export function normalizeServices(services) {
+  return (services || []).map((s) => (typeof s === "string" ? { name: s, price: 0 } : { name: String(s.name), price: Number(s.price) || 0 }));
+}
 
 export function languageInfo(code) {
   return LANGUAGES.find((l) => l.code === code) ?? LANGUAGES[0];

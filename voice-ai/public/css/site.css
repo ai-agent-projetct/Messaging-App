@@ -125,3 +125,13 @@ details p { color: var(--ink-soft); margin: 10px 0 0; }
 
 footer { padding: 40px 0; color: var(--muted); font-size: 14px; }
 footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+
+.card .icon { font-size: 20px; }
+.table-scroll { overflow-x: auto; }
+.compare { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; min-width: 560px; }
+.compare th, .compare td { padding: 14px 18px; text-align: left; border-bottom: 1px solid var(--line); font-size: 15px; }
+.compare th { background: #f4f2ec; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.compare th:last-child { color: var(--brand); }
+.compare td:first-child { font-weight: 700; }
+.compare td:nth-child(2) { color: var(--muted); }
+.compare td:last-child { background: var(--brand-tint); }

@@ -13,6 +13,12 @@ const EMPTY = () => ({
   calls: [],
   appointments: [],
   leads: [],
+  customers: [],
+  questions: [],
+  messages: [],
+  alerts: [],
+  campaigns: [],
+  simulations: [],
 });
 
 export class Store {

@@ -1,49 +1,57 @@
 // The agent's "brain": takes what the caller just said, asks Claude what to
 // reply (letting it use tools like booking), and returns text to speak.
-import Anthropic from "@anthropic-ai/sdk";
-import { languageInfo } from "./catalog.js";
-import { runTool, todayIn, toolDefinitions } from "./tools.js";
+import { languageInfo, normalizeServices } from "./catalog.js";
+import { customerContext } from "./customers.js";
+import { Anthropic, EFFORT, aiEnabled, createMessage } from "./llm.js";
+import { runTool, toolDefinitions } from "./tools.js";
+import { todayIn } from "./util.js";
 
-const MODEL = process.env.AGENT_MODEL || "claude-opus-5-5";
-// Phone conversations need fast replies, so the default effort is "low".
-const EFFORT = process.env.AGENT_EFFORT || "low";
-const MAX_TOOL_ROUNDS = 5;
+export { aiEnabled };
 
-let client = null;
-export function aiEnabled() {
-  return Boolean(process.env.ANTHROPIC_API_KEY) && process.env.AI_MODE !== "mock";
-}
-function getClient() {
-  client ??= new Anthropic();
-  return client;
-}
+const MAX_TOOL_ROUNDS = 6;
+const DAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-export function buildSystemPrompt(agent, call) {
+export function buildSystemPrompt(db, agent, call) {
   const lang = languageInfo(agent.language);
+  const org = db.get("orgs", agent.orgId);
   const hours = agent.hours;
-  const days = hours.days.map((d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d]).join(", ");
+  const services = normalizeServices(agent.services)
+    .map((s) => (s.price ? `${s.name} (₹${s.price})` : s.name))
+    .join(", ");
+  const faqs = (agent.faqs || []).map((f) => `Q: ${f.q}\nA: ${f.a}`).join("\n\n");
+  const customer = call.customerId ? db.get("customers", call.customerId) : null;
+  const campaign = call.campaignId ? db.get("campaigns", call.campaignId) : null;
+
   return [
-    `You are ${agent.name}, the phone assistant for this business. You are talking to a caller on a live phone call.`,
+    campaign
+      ? `You are ${agent.name}, an AI assistant phoning a customer on behalf of ${org?.name ?? "this business"}. You placed this call.`
+      : `You are ${agent.name}, the AI phone receptionist for ${org?.name ?? "this business"}. You are on a live phone call.`,
     `Today is ${todayIn(agent.timeZone)} (${agent.timeZone}).`,
-    `Speak ${lang.name}. If the caller switches language, follow them.`,
+    `Speak ${lang.name}. Indian callers often mix languages (Hinglish, Tanglish and so on): reply in the same mix they use, and switch language whenever they do.`,
     "",
     "How to talk:",
     "- Everything you write is read aloud by a text-to-speech voice. Use plain spoken sentences: no lists, markdown, emojis or URLs.",
     "- Keep each reply to one to three short sentences, then let the caller speak.",
     "- Say numbers, prices and times the way a person would say them.",
-    "- Only state facts from the business information below. If you don't know, say so and offer to take a message.",
-    "- If asked whether you are a person, say honestly that you are the business's AI assistant, and offer to take a message or transfer if you can.",
-    "- Before booking, read back the date, time, name and phone number and get a yes.",
+    "- Only state facts from the business information and answers below. If you don't know, say so, use note_unanswered_question, and offer to take a message.",
+    "- If asked whether you are a person, say honestly that you are the business's AI assistant.",
+    "- Before booking, cancelling or rescheduling, read back the details and get a yes.",
+    "- If something is urgent (a medical emergency, an angry customer, a big order), use alert_owner. For emergencies, also tell them to call 112 right away.",
     "- When the caller is done, say a short goodbye and use end_call.",
     "",
-    `Opening hours: ${days}, ${hours.open} to ${hours.close}.`,
-    agent.services?.length ? `Services: ${agent.services.join(", ")}.` : "",
-    `You already greeted the caller with: "${agent.greeting}"`,
-    call.callerNumber ? `The caller is phoning from ${call.callerNumber}; confirm it instead of asking for a number.` : "",
+    `Opening hours: ${hours.days.map((d) => DAY_SHORT[d]).join(", ")}, ${hours.open} to ${hours.close}.`,
+    services ? `Services and prices: ${services}.` : "",
+    `You already said: "${call.greeting ?? agent.greeting}"`,
+    call.callerNumber ? `The other person's phone number is ${call.callerNumber}; confirm it instead of asking for a number.` : "",
+    campaign
+      ? `\nPurpose of this call: ${campaign.goal}\nIf they are not interested, thank them and end the call. If they ask not to be called again, use do_not_call.`
+      : "",
+    customer ? `\n<caller_profile>\n${customerContext(db, customer)}\n</caller_profile>` : "",
     "",
     "<business_information>",
     agent.businessInfo || "(none provided)",
     "</business_information>",
+    faqs ? `\n<answers_from_owner>\n${faqs}\n</answers_from_owner>` : "",
     "",
     "<owner_instructions>",
     agent.instructions || "(none)",
@@ -53,12 +61,16 @@ export function buildSystemPrompt(agent, call) {
     .join("\n");
 }
 
+/** The first thing said on a call; returning callers are welcomed by name. */
+export function greetingFor(agent, customer) {
+  const first = customer?.name?.trim().split(/\s+/)[0];
+  if (!first) return agent.greeting;
+  return agent.language.startsWith("en") ? `Welcome back, ${first}! ${agent.greeting}` : `${first}, ${agent.greeting}`;
+}
+
 // Text-to-speech engines read symbols literally, so strip formatting.
 export function speakable(text) {
-  return text
-    .replace(/[*_#`>]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  return text.replace(/[*_#`>]/g, "").replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -67,33 +79,40 @@ export function speakable(text) {
  */
 export async function respond(db, agent, call, userText) {
   call.transcript.push({ role: "caller", text: userText, at: new Date().toISOString() });
-  const outcome = aiEnabled() ? await claudeTurn(db, agent, call, userText) : mockTurn(db, agent, call, userText);
+  const outcome = aiEnabled() ? await claudeTurn(db, agent, call, userText) : demoTurn(db, agent, call, userText);
   const reply = speakable(outcome.reply) || "Sorry, could you say that again?";
   call.transcript.push({ role: "agent", text: reply, at: new Date().toISOString() });
   if (outcome.action?.summary) call.summary = outcome.action.summary;
-  db.update("calls", call.id, { transcript: call.transcript, messages: call.messages, summary: call.summary });
+  db.update("calls", call.id, {
+    transcript: call.transcript,
+    messages: call.messages,
+    summary: call.summary,
+    verifiedRefs: call.verifiedRefs,
+    system: call.system,
+  });
   return { reply, action: outcome.action ?? null };
 }
 
 async function claudeTurn(db, agent, call, userText) {
-  // The history is append-only: we always keep Claude's full response content
-  // (including thinking blocks) exactly as returned.
+  // The history is append-only: Claude's full response content (including
+  // thinking blocks) is kept exactly as returned.
   const turnStart = call.messages.length;
   call.messages.push({ role: "user", content: userText });
-  const system = buildSystemPrompt(agent, call);
-  const tools = toolDefinitions(agent);
+  // Built once per call: stable prompts get cached, and rules don't shift mid-call.
+  call.system ??= buildSystemPrompt(db, agent, call);
+  const system = call.system;
+  const org = db.get("orgs", agent.orgId);
+  const tools = toolDefinitions(agent, org, call);
   const spoken = [];
   let action = null;
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let response;
     try {
-      response = await getClient().beta.messages.create({
-        model: MODEL,
+      response = await createMessage({
         max_tokens: 4000,
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default", // if the model declines, the API retries on a fallback model
         output_config: { effort: EFFORT },
+        cache_control: { type: "ephemeral" }, // reuse the system prompt + tools across turns
         system,
         tools,
         messages: call.messages,
@@ -129,19 +148,32 @@ async function claudeTurn(db, agent, call, userText) {
 }
 
 // Demo brain used when no ANTHROPIC_API_KEY is set, so the whole product can
-// be clicked through for free. It is deliberately simple.
-function mockTurn(db, agent, call, userText) {
+// be clicked through for free. It is deliberately simple, but it exercises the
+// same tools (learning loop, alerts, transfer, opt-out) so every screen fills up.
+function demoTurn(db, agent, call, userText) {
   const text = userText.toLowerCase();
+  const org = db.get("orgs", agent.orgId);
+  const has = (name) => toolDefinitions(agent, org, call).some((t) => t.name === name);
+  if (/\b(don't|do not|dont|never) call\b|\bstop calling\b/.test(text) && has("do_not_call")) {
+    runTool(db, agent, call, "do_not_call", { reason: userText });
+    return { reply: "Sorry for the trouble. We won't call this number again. Goodbye.", action: { type: "hangup", summary: "Asked not to be called again" } };
+  }
   if (/\b(bye|thank you|thanks|that's all)\b/.test(text)) {
     return { reply: "You're welcome. Have a great day, goodbye!", action: { type: "hangup", summary: "Demo call" } };
   }
-  if (/\b(book|appointment|slot|reserve)\b/.test(text) && agent.bookingEnabled) {
-    return {
-      reply:
-        "I'd be happy to help you book. This is demo mode, so I can't check the calendar yet. Add an Anthropic API key to turn on the real assistant.",
-    };
+  if (/\b(emergency|urgent|angry|complaint)\b/.test(text)) {
+    runTool(db, agent, call, "alert_owner", { reason: `Caller said: "${userText}"`, urgency: "urgent" });
+    return { reply: "I understand, this is important. I've alerted the owner right away and someone will call you back shortly." };
   }
-  return {
-    reply: `Demo mode: you said "${userText}". Add an Anthropic API key on the server to get real AI answers about ${agent.name}.`,
-  };
+  if (/\b(human|person|manager|owner|staff)\b/.test(text) && has("transfer_to_human")) {
+    return { reply: "Sure, connecting you to a member of our team now.", action: { type: "transfer", reason: "Caller asked for a person" } };
+  }
+  if (/\b(book|appointment|slot|reserve)\b/.test(text) && agent.bookingEnabled) {
+    return { reply: "I'd be happy to help you book. Demo mode can't check the calendar; add an Anthropic API key to turn on the real assistant." };
+  }
+  if (text.includes("?")) {
+    runTool(db, agent, call, "note_unanswered_question", { question: userText });
+    return { reply: `Demo mode: I've noted your question "${userText}" for the owner. Add an Anthropic API key for real answers.` };
+  }
+  return { reply: `Demo mode: you said "${userText}". Add an Anthropic API key on the server to get real AI answers.` };
 }
