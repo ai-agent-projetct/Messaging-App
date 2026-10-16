@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Leads · iThrive WhatsApp{% endblock %}
+{% block content %}
+<div class="stats">
+  <div class="stat"><div class="n">{{ total }}</div><div class="l">Enquiries</div></div>
+  <div class="stat"><div class="n">{{ scores.get('hot', 0) }}</div><div class="l">Hot leads</div></div>
+  <div class="stat"><div class="n">{{ stages.get('qualified', 0) + stages.get('meeting_requested', 0) }}</div><div class="l">Qualified / meeting</div></div>
+  <div class="stat"><div class="n">{{ waiting }}</div><div class="l">Waiting for a person</div></div>
+  <div class="stat"><div class="n">{{ stages.get('won', 0) }}</div><div class="l">Won</div></div>
+  <div class="stat"><div class="n">{{ response }}</div><div class="l">Avg first response</div></div>
+</div>
+
+<div class="card">
+  <form class="inline" method="get">
+    <input name="q" value="{{ q }}" placeholder="Search name, phone, company, project" style="flex:1;min-width:200px">
+    <select name="stage"><option value="">All stages</option>
+      {% for s in all_stages %}<option value="{{ s }}" {% if s == f_stage %}selected{% endif %}>{{ s }} ({{ stages.get(s, 0) }})</option>{% endfor %}
+    </select>
+    <select name="score"><option value="">All scores</option>
+      {% for s in ['hot', 'warm', 'cold'] %}<option {% if s == f_score %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <button>Filter</button>
+  </form>
+</div>
+
+<div class="card table-wrap">
+  <table>
+    <tr><th>Client</th><th>Project</th><th>Score</th><th>Stage</th><th>Summary</th><th>Updated</th></tr>
+    {% for l in leads %}
+    <tr class="click" onclick="location.href='/admin/leads/{{ l.id }}'">
+      <td><a href="/admin/leads/{{ l.id }}">{{ l.display_name }}</a>{% if l.company %}<div class="small muted">{{ l.company }}</div>{% endif %}<div class="small muted">+{{ l.phone }}</div></td>
+      <td>{{ l.project_type or l.service or '-' }}</td>
+      <td><span class="pill {{ l.score }}">{{ l.score }}</span></td>
+      <td>{% if l.human_takeover %}<span class="pill human">needs person</span>{% else %}<span class="pill">{{ l.stage }}</span>{% endif %}{% if l.opted_out %} <span class="pill">opted out</span>{% endif %}</td>
+      <td class="small">{{ l.summary }}</td>
+      <td class="small muted">{{ l.updated_at | ist }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No enquiries yet. Messages to +91 93845 64915 will show up here.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <b>Recent activity</b>
+  <table>
+    {% for e in events %}
+    <tr><td class="small muted">{{ e.created_at | ist }}</td>
+      <td class="{{ 'ok' if e.ok else 'fail' }}">{{ e.type }}</td>
+      <td>{% if e.lead_id %}<a href="/admin/leads/{{ e.lead_id }}">{{ names.get(e.lead_id, e.lead_id) }}</a>{% endif %}</td>
+      <td class="small">{{ e.detail }}</td></tr>
+    {% else %}<tr><td class="muted">Nothing yet.</td></tr>{% endfor %}
+  </table>
+</div>
+{% endblock %}

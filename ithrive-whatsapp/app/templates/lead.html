@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}{{ lead.display_name }} · iThrive WhatsApp{% endblock %}
+{% block content %}
+<p><a href="/admin">← All leads</a></p>
+<div class="grid2">
+  <div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+        <div><b style="font-size:18px">{{ lead.display_name }}</b>
+          <span class="pill {{ lead.score }}">{{ lead.score }}</span>
+          {% if lead.human_takeover %}<span class="pill human">you are handling this chat</span>{% else %}<span class="pill">AI is replying</span>{% endif %}
+          <div class="small muted">+{{ lead.phone }} · <a href="https://wa.me/{{ lead.phone }}" target="_blank" rel="noopener">open in WhatsApp</a></div>
+        </div>
+        <form method="post" action="/admin/leads/{{ lead.id }}/takeover">
+          {% if lead.human_takeover %}
+            <input type="hidden" name="on" value="0"><button class="secondary">Hand back to AI</button>
+          {% else %}
+            <input type="hidden" name="on" value="1"><button>Take over chat</button>
+          {% endif %}
+        </form>
+      </div>
+      {% if lead.handover_reason and lead.human_takeover %}<p class="small"><b>Why:</b> {{ lead.handover_reason }}</p>{% endif %}
+    </div>
+
+    <div class="card">
+      <div class="chat" id="chat">
+        {% for m in messages %}
+        <div class="bubble {{ m.direction }} {{ 'staff' if m.sender == 'staff' else '' }}">{{ m.text }}
+          <div class="meta">{{ {'client': lead.display_name, 'ai': 'AI assistant', 'staff': 'Team', 'system': 'Automatic'}.get(m.sender, m.sender) }} · {{ m.created_at | ist }}{% if m.status %} · {{ m.status }}{% endif %}</div>
+        </div>
+        {% else %}<p class="muted">No messages.</p>{% endfor %}
+      </div>
+      <form method="post" action="/admin/leads/{{ lead.id }}/send" style="margin-top:12px;display:flex;gap:8px">
+        <textarea name="text" rows="2" placeholder="Reply as the iThrive team (this takes the chat over from the AI)" required></textarea>
+        <button>Send</button>
+      </form>
+      {% if lead.last_inbound_at %}<p class="small muted">Free-form replies only work within 24 hours of the client's last message ({{ lead.last_inbound_at | ist }}).</p>{% endif %}
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <b>Summary</b>
+      <p>{{ lead.summary or '-' }}</p>
+      <dl class="small">
+        <dt>Service</dt><dd>{{ lead.service or '-' }}</dd>
+        <dt>Intent</dt><dd>{{ lead.intent or '-' }}</dd>
+        <dt>Follow-ups sent</dt><dd>{{ lead.followups_sent }}</dd>
+        <dt>Next follow-up</dt><dd>{{ lead.next_followup_at | ist }}</dd>
+        <dt>Sales alerted</dt><dd>{{ 'yes' if lead.sales_alerted else 'no' }}</dd>
+        <dt>Opted out</dt><dd>{{ 'yes' if lead.opted_out else 'no' }}</dd>
+      </dl>
+    </div>
+
+    <form class="card" method="post" action="/admin/leads/{{ lead.id }}/update">
+      <b>Lead details</b>
+      <div class="field"><label>Stage</label><select name="stage">{% for s in all_stages %}<option {% if s == lead.stage %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></div>
+      <div class="field"><label>Score</label><select name="score">{% for s in ['hot', 'warm', 'cold'] %}<option {% if s == lead.score %}selected{% endif %}>{{ s }}</option>{% endfor %}</select></div>
+      {% for f in fields %}
+      <div class="field"><label>{{ f.replace('_', ' ') }}</label><input name="{{ f }}" value="{{ lead[f] }}"></div>
+      {% endfor %}
+      <div class="field"><label>Staff notes (never shown to the client)</label><textarea name="staff_notes" rows="3">{{ lead.staff_notes }}</textarea></div>
+      <button>Save</button>
+    </form>
+
+    <div class="card">
+      <b>Activity</b>
+      {% for e in events %}<div class="small"><span class="{{ 'ok' if e.ok else 'fail' }}">{{ e.type }}</span> · {{ e.created_at | ist }}<div class="muted">{{ e.detail }}</div></div>
+      {% else %}<p class="small muted">Nothing yet.</p>{% endfor %}
+    </div>
+  </div>
+</div>
+<script>const c = document.getElementById('chat'); c.scrollTop = c.scrollHeight;</script>
+{% endblock %}

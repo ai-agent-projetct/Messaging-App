@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Knowledge base · iThrive WhatsApp{% endblock %}
+{% block content %}
+<div class="card">
+  <b>Knowledge base</b>
+  <p class="small muted">The assistant answers only from the enabled entries below. Replace every <code>[STAFF: …]</code> placeholder with real, approved information. Never add prices you don't want quoted.</p>
+</div>
+
+{% for k in items %}
+<form class="card" method="post" action="/admin/knowledge">
+  <input type="hidden" name="item_id" value="{{ k.id }}">
+  <div class="field"><label>Title</label><input name="title" value="{{ k.title }}" required></div>
+  <div class="field"><label>Content</label><textarea name="content" rows="4" required>{{ k.content }}</textarea></div>
+  <div class="inline" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+    <label class="small"><input type="checkbox" name="enabled" value="1" style="width:auto" {% if k.enabled %}checked{% endif %}> enabled</label>
+    <button name="action" value="save">Save</button>
+    <button name="action" value="delete" class="danger" onclick="return confirm('Delete this entry?')">Delete</button>
+    {% if '[STAFF:' in k.content %}<span class="pill human">needs your details</span>{% endif %}
+  </div>
+</form>
+{% endfor %}
+
+<form class="card" method="post" action="/admin/knowledge">
+  <b>Add an entry (FAQ, case study, policy…)</b>
+  <div class="field"><label>Title</label><input name="title" required></div>
+  <div class="field"><label>Content</label><textarea name="content" rows="4" required></textarea></div>
+  <button name="action" value="save">Add</button>
+</form>
+{% endblock %}
